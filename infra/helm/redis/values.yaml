@@ -1,0 +1,10 @@
+# redis Helm values
+# TODO: fill in image, resources, autoscaling, and env for redis
+replicaCount: 1
+image:
+  repository: your-registry/redis
+  tag: latest
+  pullPolicy: IfNotPresent
+service:
+  type: ClusterIP
+  port: 80

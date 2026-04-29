@@ -1,0 +1,10 @@
+# pgbouncer Helm values
+# TODO: fill in image, resources, autoscaling, and env for pgbouncer
+replicaCount: 1
+image:
+  repository: your-registry/pgbouncer
+  tag: latest
+  pullPolicy: IfNotPresent
+service:
+  type: ClusterIP
+  port: 80

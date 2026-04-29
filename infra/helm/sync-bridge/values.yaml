@@ -1,0 +1,10 @@
+# sync-bridge Helm values
+# TODO: fill in image, resources, autoscaling, and env for sync-bridge
+replicaCount: 1
+image:
+  repository: your-registry/sync-bridge
+  tag: latest
+  pullPolicy: IfNotPresent
+service:
+  type: ClusterIP
+  port: 80

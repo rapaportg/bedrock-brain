@@ -1,0 +1,10 @@
+# mcp-gateway Helm values
+# TODO: fill in image, resources, autoscaling, and env for mcp-gateway
+replicaCount: 1
+image:
+  repository: your-registry/mcp-gateway
+  tag: latest
+  pullPolicy: IfNotPresent
+service:
+  type: ClusterIP
+  port: 80

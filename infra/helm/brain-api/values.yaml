@@ -1,0 +1,67 @@
+# =============================================================================
+# brain-api Helm values
+# Override for each environment (staging.yaml, prod.yaml)
+# =============================================================================
+
+replicaCount: 2
+
+image:
+  repository: your-registry/brain-api
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8000
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+  host: brain-api.bedrock.internal
+  tls: []
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 20
+  targetCPUUtilizationPercentage: 60
+  targetMemoryUtilizationPercentage: 75
+
+env:
+  ENVIRONMENT: production
+  LOG_LEVEL: INFO
+  POSTGRES_HOST: pgbouncer-svc
+  POSTGRES_PORT: "6432"
+  POSTGRES_DB: bedrock
+  S3_ENDPOINT_URL: "https://your-nutanix-objects-endpoint"
+  S3_BUCKET_NAME: bedrock-brain
+  S3_REGION: us-east-1
+  OIDC_ISSUER_URL: "https://your-keycloak-or-okta-domain/realms/bedrock"
+  OIDC_JWKS_URL: "https://your-keycloak-or-okta-domain/realms/bedrock/protocol/openid-connect/certs"
+  OIDC_AUDIENCE: brain-api
+
+# Sensitive values — override via sealed secrets or external secrets operator
+secrets:
+  POSTGRES_USER: ""
+  POSTGRES_PASSWORD: ""
+  S3_ACCESS_KEY_ID: ""
+  S3_SECRET_ACCESS_KEY: ""
+  SECRET_KEY: ""
+
+serviceAccount:
+  create: true
+  name: brain-api
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1

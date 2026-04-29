@@ -1,0 +1,6 @@
+apiVersion: v2
+name: brain-api
+description: Bedrock Brain API — RBAC-enforced note store backed by Nutanix Objects
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

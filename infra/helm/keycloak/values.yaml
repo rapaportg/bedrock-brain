@@ -1,0 +1,10 @@
+# keycloak Helm values
+# TODO: fill in image, resources, autoscaling, and env for keycloak
+replicaCount: 1
+image:
+  repository: your-registry/keycloak
+  tag: latest
+  pullPolicy: IfNotPresent
+service:
+  type: ClusterIP
+  port: 80

@@ -1,0 +1,85 @@
+{
+  "realm": "bedrock",
+  "enabled": true,
+  "displayName": "Bedrock Brain",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "sslRequired": "external",
+  "accessTokenLifespan": 3600,
+
+  "roles": {
+    "realm": [
+      { "name": "org-admin",   "description": "Full access across the entire org" },
+      { "name": "team-admin",  "description": "Admin within assigned teams" },
+      { "name": "member",      "description": "Standard org member" },
+      { "name": "agent",       "description": "Automated agent identity (service account)" }
+    ]
+  },
+
+  "groups": [
+    {
+      "name": "Sales Org",
+      "path": "/sales-org",
+      "realmRoles": ["member"],
+      "subGroups": [
+        { "name": "SDR Team",      "path": "/sales-org/sdr-team",      "realmRoles": ["member"] },
+        { "name": "AE Team",       "path": "/sales-org/ae-team",       "realmRoles": ["member"] },
+        { "name": "Sales Leaders", "path": "/sales-org/sales-leaders", "realmRoles": ["member", "team-admin"] }
+      ]
+    }
+  ],
+
+  "clients": [
+    {
+      "clientId": "brain-api",
+      "name": "Brain API",
+      "enabled": true,
+      "bearerOnly": true,
+      "publicClient": false,
+      "protocol": "openid-connect"
+    },
+    {
+      "clientId": "brain-ui",
+      "name": "Brain UI (dev)",
+      "enabled": true,
+      "publicClient": true,
+      "redirectUris": ["http://localhost:*", "http://127.0.0.1:*"],
+      "webOrigins": ["http://localhost:3000"],
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true
+    },
+    {
+      "clientId": "mcp-gateway",
+      "name": "MCP Gateway",
+      "enabled": true,
+      "bearerOnly": true,
+      "publicClient": false,
+      "protocol": "openid-connect"
+    }
+  ],
+
+  "users": [
+    {
+      "username": "dev-admin",
+      "email": "dev-admin@bedrock.local",
+      "firstName": "Dev",
+      "lastName": "Admin",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "admin123", "temporary": false }],
+      "realmRoles": ["org-admin", "member"]
+    },
+    {
+      "username": "dev-user",
+      "email": "dev-user@bedrock.local",
+      "firstName": "Dev",
+      "lastName": "User",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "user123", "temporary": false }],
+      "realmRoles": ["member"]
+    }
+  ]
+}

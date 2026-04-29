@@ -1,0 +1,224 @@
+version: "3.9"
+
+# =============================================================================
+# bedrock-brain — local development stack
+#
+# Services:
+#   brain-api     FastAPI — core RBAC + note CRUD + S3 proxy
+#   mcp-gateway   MCP server — agent-facing, enforces permissions
+#   sync-bridge   Obsidian vault watcher — pushes changes to brain-api
+#   keycloak      OIDC auth provider (dev substitute for Okta)
+#   postgres      Metadata, RBAC, ACLs
+#   pgbouncer     Connection pooler in front of postgres
+#   redis         Token cache + session state
+#   minio         S3-compatible storage (dev substitute for Nutanix Objects)
+# =============================================================================
+
+networks:
+  bedrock:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  keycloak_data:
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Postgres — runs on Nutanix NCI VM in prod; container here for dev
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    networks: [bedrock]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-bedrock}
+      POSTGRES_USER: ${POSTGRES_USER:-bedrock}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bedrock}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # PgBouncer — connection pooler (critical at scale: 15k agents → postgres)
+  # ---------------------------------------------------------------------------
+  pgbouncer:
+    image: bitnami/pgbouncer:latest
+    restart: unless-stopped
+    networks: [bedrock]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRESQL_HOST: postgres
+      POSTGRESQL_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRESQL_DATABASE: ${POSTGRES_DB:-bedrock}
+      POSTGRESQL_USERNAME: ${POSTGRES_USER:-bedrock}
+      POSTGRESQL_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      PGBOUNCER_POOL_MODE: ${PGBOUNCER_POOL_MODE:-transaction}
+      PGBOUNCER_MAX_CLIENT_CONN: ${PGBOUNCER_MAX_CLIENT_CONN:-1000}
+      PGBOUNCER_DEFAULT_POOL_SIZE: ${PGBOUNCER_DEFAULT_POOL_SIZE:-20}
+    ports:
+      - "5433:6432"
+
+  # ---------------------------------------------------------------------------
+  # Redis — token cache, session state, rate limiting
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks: [bedrock]
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # MinIO — S3-compatible local substitute for Nutanix Objects
+  # In prod: point S3_ENDPOINT_URL at your Nutanix Objects endpoint
+  # ---------------------------------------------------------------------------
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    networks: [bedrock]
+    volumes:
+      - minio_data:/data
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-minioadmin}
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # MinIO console UI
+
+  # Create the default bucket on startup
+  minio-init:
+    image: minio/mc:latest
+    networks: [bedrock]
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 ${S3_ACCESS_KEY_ID:-minioadmin} ${S3_SECRET_ACCESS_KEY:-minioadmin};
+        mc mb --ignore-existing local/${S3_BUCKET_NAME:-bedrock-brain};
+        mc anonymous set none local/${S3_BUCKET_NAME:-bedrock-brain};
+        echo 'Bucket ready.';
+      "
+
+  # ---------------------------------------------------------------------------
+  # Keycloak — OIDC auth provider (dev substitute for Okta)
+  # Realm config auto-imported from keycloak/realm-export.json
+  # ---------------------------------------------------------------------------
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    restart: unless-stopped
+    networks: [bedrock]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-bedrock}
+      KC_DB_USERNAME: ${POSTGRES_USER:-bedrock}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+    command: start-dev --import-realm
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/realms/bedrock || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+    ports:
+      - "8080:8080"   # Keycloak admin + OIDC endpoints
+
+  # ---------------------------------------------------------------------------
+  # Brain API — FastAPI core service
+  # ---------------------------------------------------------------------------
+  brain-api:
+    build:
+      context: ./services/brain-api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks: [bedrock]
+    depends_on:
+      pgbouncer:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      keycloak:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      POSTGRES_HOST: pgbouncer
+      POSTGRES_PORT: 6432
+    volumes:
+      - ./services/brain-api/app:/app/app  # hot reload in dev
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # MCP Gateway — agent-facing MCP server
+  # ---------------------------------------------------------------------------
+  mcp-gateway:
+    build:
+      context: ./services/mcp-gateway
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks: [bedrock]
+    depends_on:
+      brain-api:
+        condition: service_healthy
+    env_file: .env
+    volumes:
+      - ./services/mcp-gateway/app:/app/app  # hot reload in dev
+    ports:
+      - "8001:8001"
+
+  # ---------------------------------------------------------------------------
+  # Sync Bridge — Obsidian vault → brain-api sync daemon
+  # Mount your local Obsidian vault to /vault
+  # ---------------------------------------------------------------------------
+  sync-bridge:
+    build:
+      context: ./services/sync-bridge
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks: [bedrock]
+    depends_on:
+      brain-api:
+        condition: service_healthy
+    env_file: .env
+    volumes:
+      - ./services/sync-bridge/app:/app/app  # hot reload in dev
+      # Mount your local Obsidian vault here:
+      # - /path/to/your/obsidian/vault:/vault:ro

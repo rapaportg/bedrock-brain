@@ -1,0 +1,2 @@
+# TODO: deployment template for pgbouncer
+# Model after infra/helm/brain-api/templates/deployment.yaml
