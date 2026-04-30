@@ -1,14 +1,153 @@
+# =============================================================================
+# bedrock-brain — .gitignore
+# =============================================================================
+
+# -------------------------------------
+# Environment & secrets (NEVER commit)
+# -------------------------------------
 .env
-*.pyc
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+secrets/
+
+# -------------------------------------
+# Python
+# -------------------------------------
 __pycache__/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-dist/
-build/
-*.egg-info/
+*.py[cod]
+*$py.class
+*.so
+.Python
 .venv/
 venv/
+env/
+ENV/
+pip-wheel-metadata/
+*.egg-info/
+*.egg
+dist/
+build/
+wheels/
+.installed.cfg
+lib/
+lib64/
+
+# -------------------------------------
+# Test & coverage artifacts
+# -------------------------------------
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+coverage/
+htmlcov/
+*.cover
+.hypothesis/
+pytest-cache-files-*/
+
+# -------------------------------------
+# Type checking & linting
+# -------------------------------------
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+.pytype/
+
+# -------------------------------------
+# Jupyter
+# -------------------------------------
+.ipynb_checkpoints/
+*.ipynb
+
+# -------------------------------------
+# Docker
+# -------------------------------------
+*.dockerignore
+
+# -------------------------------------
+# Kubernetes / Helm
+# -------------------------------------
+# Don't ignore rendered chart output
+infra/helm/**/charts/
+infra/helm/**/.helmignore
+
+# -------------------------------------
+# Alembic generated files to keep,
+# but ignore local override configs
+# -------------------------------------
+alembic.ini.local
+
+# -------------------------------------
+# Node (if any frontend tooling added)
+# -------------------------------------
 node_modules/
-*.log
+.npm/
+.yarn/
+dist/
+.next/
+out/
+
+# -------------------------------------
+# macOS
+# -------------------------------------
 .DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# -------------------------------------
+# Windows
+# -------------------------------------
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# -------------------------------------
+# Linux
+# -------------------------------------
+*~
+
+# -------------------------------------
+# IDEs & editors
+# -------------------------------------
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json.example
+.idea/
+*.iml
+*.iws
+*.ipr
+*.swp
+*.swo
+*.swn
+.vim/
+*.sublime-project
+*.sublime-workspace
+
+# -------------------------------------
+# Logs
+# -------------------------------------
+*.log
+logs/
+log/
+
+# -------------------------------------
+# MinIO local data (docker volume)
+# -------------------------------------
+minio_data/
+
+# -------------------------------------
+# Misc
+# -------------------------------------
+*.bak
+*.tmp
+*.orig
+.cache/
