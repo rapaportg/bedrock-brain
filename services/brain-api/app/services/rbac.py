@@ -129,16 +129,24 @@ async def list_accessible_note_ids(
             (Note.visibility == "team") & Note.team_id.in_(team_ids)
         )
 
-    # ACL grants
-    acl_result = await db.execute(
-        select(NoteACL.note_id).where(
-            NoteACL.principal_type == caller.principal_type,
-            NoteACL.principal_id == caller.principal_id,
+    # ACL grants — check the caller's own principal, and for agents also the owner
+    # user (agents inherit owner's explicit ACL grants, matching the _check() logic).
+    acl_principals = [(caller.principal_type, caller.principal_id)]
+    if caller.principal_type == "agent":
+        acl_principals.append(("user", caller.user_id))
+
+    acl_note_ids: set[UUID] = set()
+    for p_type, p_id in acl_principals:
+        acl_result = await db.execute(
+            select(NoteACL.note_id).where(
+                NoteACL.principal_type == p_type,
+                NoteACL.principal_id == p_id,
+            )
         )
-    )
-    acl_note_ids = [row[0] for row in acl_result.all()]
+        acl_note_ids.update(row[0] for row in acl_result.all())
+
     if acl_note_ids:
-        conditions.append(Note.id.in_(acl_note_ids))
+        conditions.append(Note.id.in_(list(acl_note_ids)))
 
     query = select(Note.id).where(or_(*conditions))
     if visibility_filter:

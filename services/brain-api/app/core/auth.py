@@ -11,6 +11,7 @@ Both resolve to a CallerIdentity, which the RBAC service uses to evaluate access
 from __future__ import annotations
 
 import hashlib
+import time
 from typing import Annotated
 from uuid import UUID
 
@@ -27,18 +28,22 @@ from app.db.session import get_db
 bearer_scheme = HTTPBearer(auto_error=False)
 
 # ---------------------------------------------------------------------------
-# JWKS cache (simple in-memory; production should use Redis TTL cache)
+# JWKS cache — refreshed every 5 minutes so key rotation is picked up
+# without a restart.
 # ---------------------------------------------------------------------------
 _jwks_cache: dict | None = None
+_jwks_fetched_at: float = 0.0
+_JWKS_TTL = 300  # seconds
 
 
 async def _get_jwks() -> dict:
-    global _jwks_cache
-    if _jwks_cache is None:
+    global _jwks_cache, _jwks_fetched_at
+    if _jwks_cache is None or (time.monotonic() - _jwks_fetched_at) > _JWKS_TTL:
         async with httpx.AsyncClient() as client:
             resp = await client.get(settings.oidc_jwks_url, timeout=10)
             resp.raise_for_status()
             _jwks_cache = resp.json()
+            _jwks_fetched_at = time.monotonic()
     return _jwks_cache
 
 
@@ -72,7 +77,7 @@ async def resolve_caller(
     # Try OIDC JWT first
     try:
         return await _resolve_oidc_token(token, db)
-    except (JWTError, Exception):
+    except JWTError:
         pass
 
     # Fall back to agent token

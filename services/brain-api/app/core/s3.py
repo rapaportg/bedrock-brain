@@ -15,8 +15,8 @@ Key prefix structure:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
-from typing import TYPE_CHECKING
 from uuid import UUID
 
 import boto3
@@ -24,18 +24,21 @@ from botocore.exceptions import ClientError
 
 from app.core.config import settings
 
-if TYPE_CHECKING:
-    pass
+# Module-level cached client — one boto3 client per process.
+_s3_client = None
 
 
 def _client():
-    return boto3.client(
-        "s3",
-        endpoint_url=settings.s3_endpoint_url,
-        aws_access_key_id=settings.s3_access_key_id,
-        aws_secret_access_key=settings.s3_secret_access_key,
-        region_name=settings.s3_region,
-    )
+    global _s3_client
+    if _s3_client is None:
+        _s3_client = boto3.client(
+            "s3",
+            endpoint_url=settings.s3_endpoint_url,
+            aws_access_key_id=settings.s3_access_key_id,
+            aws_secret_access_key=settings.s3_secret_access_key,
+            region_name=settings.s3_region,
+        )
+    return _s3_client
 
 
 def build_s3_key(visibility: str, note_id: UUID, owner_id: UUID, team_id: UUID | None = None) -> str:
@@ -49,11 +52,12 @@ def build_s3_key(visibility: str, note_id: UUID, owner_id: UUID, team_id: UUID |
         return f"public/{note_id}.md"
 
 
-def put_note(s3_key: str, content: str) -> str:
+async def put_note(s3_key: str, content: str) -> str:
     """Upload note content and return its SHA-256 hash."""
     encoded = content.encode("utf-8")
     content_hash = hashlib.sha256(encoded).hexdigest()
-    _client().put_object(
+    await asyncio.to_thread(
+        _client().put_object,
         Bucket=settings.s3_bucket_name,
         Key=s3_key,
         Body=encoded,
@@ -62,10 +66,14 @@ def put_note(s3_key: str, content: str) -> str:
     return content_hash
 
 
-def get_note(s3_key: str) -> str:
+async def get_note(s3_key: str) -> str:
     """Fetch note content from S3."""
     try:
-        response = _client().get_object(Bucket=settings.s3_bucket_name, Key=s3_key)
+        response = await asyncio.to_thread(
+            _client().get_object,
+            Bucket=settings.s3_bucket_name,
+            Key=s3_key,
+        )
         return response["Body"].read().decode("utf-8")
     except ClientError as e:
         if e.response["Error"]["Code"] == "NoSuchKey":
@@ -73,25 +81,34 @@ def get_note(s3_key: str) -> str:
         raise
 
 
-def delete_note(s3_key: str) -> None:
+async def delete_note(s3_key: str) -> None:
     """Delete a note object from S3."""
-    _client().delete_object(Bucket=settings.s3_bucket_name, Key=s3_key)
+    await asyncio.to_thread(
+        _client().delete_object,
+        Bucket=settings.s3_bucket_name,
+        Key=s3_key,
+    )
 
 
-def move_note(old_key: str, new_key: str) -> None:
+async def move_note(old_key: str, new_key: str) -> None:
     """Move (copy + delete) a note to a new key — used when visibility changes."""
-    _client().copy_object(
+    await asyncio.to_thread(
+        _client().copy_object,
         Bucket=settings.s3_bucket_name,
         CopySource={"Bucket": settings.s3_bucket_name, "Key": old_key},
         Key=new_key,
     )
-    _client().delete_object(Bucket=settings.s3_bucket_name, Key=old_key)
+    await asyncio.to_thread(
+        _client().delete_object,
+        Bucket=settings.s3_bucket_name,
+        Key=old_key,
+    )
 
 
-def ensure_bucket_exists() -> None:
+async def ensure_bucket_exists() -> None:
     """Called at startup to ensure the bucket exists."""
     client = _client()
     try:
-        client.head_bucket(Bucket=settings.s3_bucket_name)
+        await asyncio.to_thread(client.head_bucket, Bucket=settings.s3_bucket_name)
     except ClientError:
-        client.create_bucket(Bucket=settings.s3_bucket_name)
+        await asyncio.to_thread(client.create_bucket, Bucket=settings.s3_bucket_name)

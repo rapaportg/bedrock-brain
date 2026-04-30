@@ -54,3 +54,34 @@ async def update_note(token: str, note_id: str, **kwargs) -> dict:
         )
         resp.raise_for_status()
         return resp.json()
+
+
+async def search_notes(token: str, q: str, tag: str | None = None) -> list[dict]:
+    params: dict = {"q": q}
+    if tag:
+        params["tag"] = tag
+    async with httpx.AsyncClient(base_url=settings.mcp_brain_api_url) as client:
+        resp = await client.get("/v1/notes/search", params=params, headers=_headers(token))
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def get_note_links(token: str, note_id: str) -> list[dict]:
+    async with httpx.AsyncClient(base_url=settings.mcp_brain_api_url) as client:
+        resp = await client.get(f"/v1/notes/{note_id}/links", headers=_headers(token))
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def get_note_backlinks(token: str, note_id: str) -> list[dict]:
+    async with httpx.AsyncClient(base_url=settings.mcp_brain_api_url) as client:
+        resp = await client.get(f"/v1/notes/{note_id}/backlinks", headers=_headers(token))
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def get_related_notes(token: str, note_id: str) -> list[dict]:
+    async with httpx.AsyncClient(base_url=settings.mcp_brain_api_url) as client:
+        resp = await client.get(f"/v1/notes/{note_id}/related", headers=_headers(token))
+        resp.raise_for_status()
+        return resp.json()

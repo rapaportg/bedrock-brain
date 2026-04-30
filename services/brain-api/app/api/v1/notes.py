@@ -1,7 +1,10 @@
 """
-Notes API — CRUD + search.
+Notes API — CRUD + search + link graph.
 
 All access decisions go through app.services.rbac before any S3 or DB operation.
+
+Route order matters: /search and other literal sub-paths must be defined
+before /{note_id} so FastAPI does not capture them as UUID path params.
 """
 
 from __future__ import annotations
@@ -12,14 +15,17 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CallerIdentity, CurrentCaller
-from app.core.s3 import build_s3_key, delete_note, get_note, move_note, put_note
+from app.core.s3 import build_s3_key, delete_note, get_note, put_note
 from app.db.session import get_db
 from app.models.note import Note, NoteACL
+from app.models.note_link import NoteLink
 from app.services import rbac
+from app.services.links import sync_note_links
 
 router = APIRouter(prefix="/notes", tags=["notes"])
 
@@ -71,7 +77,7 @@ class GrantRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Endpoints
+# Endpoints — fixed paths first, then /{note_id} parameterised paths
 # ---------------------------------------------------------------------------
 
 @router.post("", response_model=NoteResponse, status_code=status.HTTP_201_CREATED)
@@ -87,7 +93,7 @@ async def create_note(
         owner_id=caller.user_id,
         team_id=body.team_id,
     )
-    content_hash = put_note(s3_key, body.content)
+    content_hash = await put_note(s3_key, body.content)
 
     note = Note(
         id=note_id,
@@ -102,6 +108,8 @@ async def create_note(
         byte_size=len(body.content.encode()),
     )
     db.add(note)
+    await db.flush()  # assign note.id before link resolution
+    await sync_note_links(note.id, body.content, db)
     await db.commit()
     await db.refresh(note)
     return note
@@ -126,6 +134,38 @@ async def list_notes(
     return result.scalars().all()
 
 
+@router.get("/search", response_model=list[NoteResponse])
+async def search_notes(
+    caller: CurrentCaller,
+    q: str = Query(..., min_length=1, description="Search term matched against note titles using trigram similarity."),
+    tag: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Full-text search over note titles (backed by the pg_trgm GIN index).
+    Results are ranked by trigram similarity and limited to notes the caller can read.
+    """
+    accessible_ids = await rbac.list_accessible_note_ids(caller, db)
+    if not accessible_ids:
+        return []
+
+    query = (
+        select(Note)
+        .where(Note.id.in_(accessible_ids))
+        .where(func.similarity(Note.title, q) > 0.1)
+        .order_by(func.similarity(Note.title, q).desc(), Note.updated_at.desc())
+    )
+    if tag:
+        query = query.where(Note.tags.any(tag))  # type: ignore[arg-type]
+
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+# ---------------------------------------------------------------------------
+# Parameterised note endpoints
+# ---------------------------------------------------------------------------
+
 @router.get("/{note_id}", response_model=NoteDetailResponse)
 async def get_note_detail(
     note_id: uuid.UUID,
@@ -134,7 +174,7 @@ async def get_note_detail(
 ):
     note = await _get_or_404(note_id, db)
     await _require_read(caller, note, db)
-    content = get_note(note.s3_key)
+    content = await get_note(note.s3_key)
     return NoteDetailResponse(**NoteResponse.model_validate(note).model_dump(), content=content)
 
 
@@ -153,7 +193,7 @@ async def update_note(
     if body.tags is not None:
         note.tags = body.tags
 
-    visibility_changed = body.visibility and body.visibility != note.visibility
+    visibility_changed = body.visibility is not None and body.visibility != note.visibility
     new_visibility = body.visibility or note.visibility
     new_team_id = body.team_id if body.team_id is not None else note.team_id
 
@@ -164,17 +204,22 @@ async def update_note(
             owner_id=note.owner_id,
             team_id=new_team_id,
         )
-        current_content = get_note(note.s3_key) if body.content is None else body.content
-        content_hash = put_note(new_s3_key, current_content)
+        current_content = await get_note(note.s3_key) if body.content is None else body.content
+        content_hash = await put_note(new_s3_key, current_content)
 
         if visibility_changed and new_s3_key != note.s3_key:
-            move_note(note.s3_key, new_s3_key)
+            # Content is already at new_s3_key (written by put_note above).
+            # Just clean up the old key; move_note would overwrite the new content.
+            await delete_note(note.s3_key)
 
         note.s3_key = new_s3_key
         note.content_hash = content_hash
         note.byte_size = len(current_content.encode())
 
-    if body.visibility:
+        # Re-sync wikilinks whenever content changes
+        await sync_note_links(note.id, current_content, db)
+
+    if body.visibility is not None:
         note.visibility = body.visibility
         note.team_id = new_team_id
         note.org_id = caller.org_id if body.visibility in ("org", "team") else None
@@ -192,10 +237,109 @@ async def delete_note_endpoint(
 ):
     note = await _get_or_404(note_id, db)
     await _require_write(caller, note, db)
-    delete_note(note.s3_key)
+    await delete_note(note.s3_key)
     await db.delete(note)
     await db.commit()
 
+
+# ---------------------------------------------------------------------------
+# Link graph endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/{note_id}/links", response_model=list[NoteResponse])
+async def get_note_links(
+    note_id: uuid.UUID,
+    caller: CurrentCaller,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Return notes that this note links to (outbound), restricted to notes
+    the caller has read access to.
+    """
+    note = await _get_or_404(note_id, db)
+    await _require_read(caller, note, db)
+
+    result = await db.execute(
+        select(NoteLink.target_id).where(NoteLink.source_id == note_id)
+    )
+    target_ids = [row[0] for row in result.all()]
+    if not target_ids:
+        return []
+
+    accessible = set(await rbac.list_accessible_note_ids(caller, db))
+    visible_ids = [tid for tid in target_ids if tid in accessible]
+    if not visible_ids:
+        return []
+
+    result = await db.execute(select(Note).where(Note.id.in_(visible_ids)))
+    return result.scalars().all()
+
+
+@router.get("/{note_id}/backlinks", response_model=list[NoteResponse])
+async def get_note_backlinks(
+    note_id: uuid.UUID,
+    caller: CurrentCaller,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Return notes that link TO this note (inbound backlinks), restricted to
+    notes the caller has read access to.
+    """
+    note = await _get_or_404(note_id, db)
+    await _require_read(caller, note, db)
+
+    result = await db.execute(
+        select(NoteLink.source_id).where(NoteLink.target_id == note_id)
+    )
+    source_ids = [row[0] for row in result.all()]
+    if not source_ids:
+        return []
+
+    accessible = set(await rbac.list_accessible_note_ids(caller, db))
+    visible_ids = [sid for sid in source_ids if sid in accessible]
+    if not visible_ids:
+        return []
+
+    result = await db.execute(select(Note).where(Note.id.in_(visible_ids)))
+    return result.scalars().all()
+
+
+@router.get("/{note_id}/related", response_model=list[NoteResponse])
+async def get_related_notes(
+    note_id: uuid.UUID,
+    caller: CurrentCaller,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Return notes that share at least one tag with this note, ordered by
+    number of shared tags descending. Restricted to notes the caller can read.
+    """
+    note = await _get_or_404(note_id, db)
+    await _require_read(caller, note, db)
+
+    if not note.tags:
+        return []
+
+    accessible_ids = await rbac.list_accessible_note_ids(caller, db)
+    if not accessible_ids:
+        return []
+
+    # Tags are a PostgreSQL ARRAY; overlap (&&) finds shared-tag notes.
+    result = await db.execute(
+        select(Note)
+        .where(
+            Note.id.in_(accessible_ids),
+            Note.id != note_id,
+            Note.tags.overlap(note.tags),  # type: ignore[attr-defined]
+        )
+        .order_by(Note.updated_at.desc())
+    )
+    return result.scalars().all()
+
+
+# ---------------------------------------------------------------------------
+# ACL management
+# ---------------------------------------------------------------------------
 
 @router.post("/{note_id}/acl", status_code=status.HTTP_201_CREATED)
 async def grant_access(
@@ -215,7 +359,11 @@ async def grant_access(
         granted_by=caller.user_id,
     )
     db.add(acl)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="ACL entry already exists")
     return {"status": "granted"}
 
 
