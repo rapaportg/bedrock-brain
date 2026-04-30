@@ -16,6 +16,16 @@
 
 set -euo pipefail
 
+# Force fully non-interactive apt/dpkg behavior so this script can be piped
+# over SSH without a TTY (no sshd_config conffile prompt, no needrestart UI).
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+export NEEDRESTART_SUSPEND=1
+export APT_LISTCHANGES_FRONTEND=none
+APT_OPTS=(-y -qq \
+    -o Dpkg::Options::=--force-confold \
+    -o Dpkg::Options::=--force-confdef)
+
 REPO_URL="${REPO_URL:-https://github.com/YOUR_USERNAME/bedrock-brain.git}"
 DEPLOY_USER="${DEPLOY_USER:-deploy}"
 APP_DIR="/opt/bedrock-brain"
@@ -29,8 +39,8 @@ echo "=========================================="
 # ---------------------------------------------------------------------------
 echo "[1/6] Updating system packages..."
 apt-get update -qq
-apt-get upgrade -y -qq
-apt-get install -y -qq \
+apt-get upgrade "${APT_OPTS[@]}"
+apt-get install "${APT_OPTS[@]}" \
     curl git ufw fail2ban \
     ca-certificates gnupg lsb-release
 
@@ -51,7 +61,7 @@ if ! command -v docker &>/dev/null; then
         | tee /etc/apt/sources.list.d/docker.list > /dev/null
 
     apt-get update -qq
-    apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin
+    apt-get install "${APT_OPTS[@]}" docker-ce docker-ce-cli containerd.io docker-compose-plugin
 fi
 systemctl enable --now docker
 echo "  Docker $(docker --version) installed."
