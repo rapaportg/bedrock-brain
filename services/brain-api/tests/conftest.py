@@ -5,10 +5,13 @@ Sets environment variables before any app module is imported so that:
   - settings.environment = "test"
   - No real DB/Redis/S3 connection is attempted at import time
   - FastAPI dependency overrides handle auth + DB in each test
+
+The _no_external_calls fixture (autouse) blocks all real S3 operations and
+link-sync calls so every test is fully self-contained.
 """
 
 import os
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -25,8 +28,19 @@ os.environ.setdefault("S3_SECRET_ACCESS_KEY", "test")
 
 
 @pytest.fixture(autouse=True)
-def _no_s3(monkeypatch):
-    """Prevent any S3 calls during tests — including the startup lifespan."""
-    with patch("app.core.s3.ensure_bucket_exists", return_value=None), \
-         patch("app.core.s3._client", return_value=None):
+def _no_external_calls():
+    """
+    Block all real S3 I/O and wikilink sync for every test.
+
+    Patches the names as imported in notes.py (where they are used) so that
+    tests which want to assert on specific calls can inspect the mocks via
+    their own patch() context managers, which take precedence over these.
+    """
+    with (
+        patch("app.core.s3.ensure_bucket_exists", new_callable=AsyncMock),
+        patch("app.api.v1.notes.put_note", new_callable=AsyncMock, return_value="testhash"),
+        patch("app.api.v1.notes.get_note", new_callable=AsyncMock, return_value="# test content"),
+        patch("app.api.v1.notes.delete_note", new_callable=AsyncMock),
+        patch("app.api.v1.notes.sync_note_links", new_callable=AsyncMock),
+    ):
         yield
