@@ -7,10 +7,13 @@ version: "3.9"
 #   - MinIO and minio-init removed  → use DigitalOcean Spaces (S3-compatible)
 #   - nginx added                   → SSL termination + reverse proxy
 #   - Hot-reload volume mounts removed
-#   - All images built from source (no :latest tags for app services)
+#   - App images pulled from DOCR (set via REGISTRY + IMAGE_TAG env vars)
 #
 # Usage:
-#   docker compose -f docker-compose.yml -f infra/digitalocean/docker-compose.prod.yml up -d
+#   REGISTRY=registry.digitalocean.com/<name> IMAGE_TAG=<sha> \
+#     docker compose -f docker-compose.yml -f infra/digitalocean/docker-compose.prod.yml up -d
+#
+# deploy.sh sets REGISTRY and IMAGE_TAG automatically.
 # =============================================================================
 
 networks:
@@ -65,31 +68,36 @@ services:
       KC_HTTP_ENABLED: "true"
 
   # ---------------------------------------------------------------------------
-  # Brain API — production image, no hot-reload mount
+  # Brain API — pre-built image from DOCR, no hot-reload mount
   # ---------------------------------------------------------------------------
   brain-api:
+    image: ${REGISTRY}/brain-api:${IMAGE_TAG}
     restart: always
     volumes: []                                       # override dev bind mount
     environment:
       ENVIRONMENT: production
 
   # ---------------------------------------------------------------------------
-  # MCP Gateway — production image, no hot-reload mount
+  # MCP Gateway — pre-built image from DOCR, no hot-reload mount
   # ---------------------------------------------------------------------------
   mcp-gateway:
+    image: ${REGISTRY}/mcp-gateway:${IMAGE_TAG}
     restart: always
     volumes: []
 
   # ---------------------------------------------------------------------------
-  # Brain Web — production image, no hot-reload mount
+  # Brain Web — pre-built image from DOCR, no hot-reload mount
+  # VITE_* vars are baked in at CI build time; not needed at runtime.
   # ---------------------------------------------------------------------------
   brain-web:
+    image: ${REGISTRY}/brain-web:${IMAGE_TAG}
     restart: always
 
   # ---------------------------------------------------------------------------
-  # Sync Bridge — production image, no hot-reload mount
+  # Sync Bridge — pre-built image from DOCR, no hot-reload mount
   # ---------------------------------------------------------------------------
   sync-bridge:
+    image: ${REGISTRY}/sync-bridge:${IMAGE_TAG}
     restart: always
     volumes: []
 

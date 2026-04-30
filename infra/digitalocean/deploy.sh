@@ -6,6 +6,15 @@
 #   bash infra/digitalocean/deploy.sh              # pull latest + restart
 #   bash infra/digitalocean/deploy.sh --first-run  # first-time: get SSL certs
 #
+# Environment variables (set by CI via SSH envs, or manually for rollback):
+#   DEPLOY_TAG        — git SHA of the images to pull (default: latest)
+#   DO_API_TOKEN      — DigitalOcean API token for DOCR authentication
+#   DO_REGISTRY_NAME  — DOCR registry slug, e.g. "bedrock"
+#
+# Rollback to a previous release:
+#   DEPLOY_TAG=<previous-sha> DO_API_TOKEN=<token> DO_REGISTRY_NAME=<name> \
+#       bash /opt/bedrock-brain/infra/digitalocean/deploy.sh
+#
 # Run as the deploy user (or root during initial setup).
 # =============================================================================
 
@@ -21,7 +30,7 @@ done
 
 cd "${APP_DIR}"
 
-# Load env to read domain names
+# Load env to read domain names and DB credentials
 set -o allexport
 # shellcheck disable=SC1091
 source .env
@@ -32,33 +41,42 @@ echo "  bedrock-brain deploy — $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 echo "=========================================="
 
 # ---------------------------------------------------------------------------
-# Pull latest code
+# Pull latest scripts / compose files (images come from DOCR, not built here)
 # ---------------------------------------------------------------------------
 echo "[1] Pulling latest from origin/main..."
 git fetch origin
 git reset --hard origin/main
 
 # ---------------------------------------------------------------------------
-# Build images
+# DOCR login
 # ---------------------------------------------------------------------------
-echo "[2] Building images..."
-${COMPOSE} build \
-    --build-arg VITE_API_BASE_URL="${VITE_API_BASE_URL:-https://${API_DOMAIN}}" \
-    --build-arg VITE_KEYCLOAK_URL="${VITE_KEYCLOAK_URL:-https://${AUTH_DOMAIN}}" \
-    --build-arg VITE_KEYCLOAK_REALM="${VITE_KEYCLOAK_REALM:-bedrock}" \
-    --build-arg VITE_KEYCLOAK_CLIENT_ID="${VITE_KEYCLOAK_CLIENT_ID:-brain-ui}"
+echo "[2] Logging in to DOCR..."
+echo "${DO_API_TOKEN}" | docker login registry.digitalocean.com \
+    -u "${DO_API_TOKEN}" --password-stdin
+
+# ---------------------------------------------------------------------------
+# Set image coordinates
+# ---------------------------------------------------------------------------
+export REGISTRY="registry.digitalocean.com/${DO_REGISTRY_NAME}"
+export IMAGE_TAG="${DEPLOY_TAG:-latest}"
+echo "    Registry : ${REGISTRY}"
+echo "    Image tag: ${IMAGE_TAG}"
+
+# ---------------------------------------------------------------------------
+# Pull pre-built images from DOCR
+# ---------------------------------------------------------------------------
+echo "[3] Pulling images (tag: ${IMAGE_TAG})..."
+${COMPOSE} pull brain-api mcp-gateway sync-bridge brain-web
 
 # ---------------------------------------------------------------------------
 # First-run: start nginx over HTTP only, get SSL certs, then enable HTTPS
 # ---------------------------------------------------------------------------
 if [[ "${FIRST_RUN}" == "true" ]]; then
-    echo "[3] First-run: obtaining Let's Encrypt certificates..."
+    echo "  First-run: obtaining Let's Encrypt certificates..."
 
-    # Temporarily use HTTP-only nginx config to pass ACME challenge
     echo "  Starting nginx for ACME challenge..."
     ${COMPOSE} up -d nginx
 
-    # Issue certs for all four subdomains
     for DOMAIN in "${APP_DOMAIN}" "${API_DOMAIN}" "${AUTH_DOMAIN}" "${MCP_DOMAIN}"; do
         echo "  Issuing cert for ${DOMAIN}..."
         docker compose run --rm certbot certonly \
@@ -74,22 +92,22 @@ if [[ "${FIRST_RUN}" == "true" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Bring up the full stack
+# Bring up the full stack (no build — images are already pulled from DOCR)
 # ---------------------------------------------------------------------------
-echo "[3] Starting / restarting services..."
-${COMPOSE} up -d --remove-orphans
+echo "[4] Starting / restarting services..."
+${COMPOSE} up -d --remove-orphans --no-build
 
 # ---------------------------------------------------------------------------
-# Run DB migrations
+# Run DB migrations (idempotent — skips already-applied files)
 # ---------------------------------------------------------------------------
-echo "[4] Running database migrations..."
+echo "[5] Running database migrations..."
 sleep 5   # give postgres a moment if it just started
-${COMPOSE} exec -T brain-api alembic upgrade head
+bash "${APP_DIR}/infra/digitalocean/migrate.sh"
 
 # ---------------------------------------------------------------------------
 # Health check
 # ---------------------------------------------------------------------------
-echo "[5] Checking service health..."
+echo "[6] Checking service health..."
 sleep 8
 ${COMPOSE} ps
 
@@ -102,9 +120,11 @@ else
 fi
 
 echo ""
-echo "  Deploy complete!"
+echo "  Deploy complete! (image tag: ${IMAGE_TAG})"
 echo "  App:      https://${APP_DOMAIN}"
 echo "  API docs: https://${API_DOMAIN}/docs"
 echo "  Auth:     https://${AUTH_DOMAIN}/admin"
 echo "  MCP:      https://${MCP_DOMAIN}"
+echo ""
+echo "  Rollback: DEPLOY_TAG=<previous-sha> bash infra/digitalocean/deploy.sh"
 echo "=========================================="

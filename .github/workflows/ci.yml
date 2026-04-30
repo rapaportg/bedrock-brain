@@ -42,7 +42,7 @@ jobs:
         working-directory: ${{ github.workspace }}
 
   # ---------------------------------------------------------------------------
-  # Job 2: Python tests — brain-api (43 tests, no live DB required)
+  # Job 2: Python tests — brain-api (166 tests, no live DB required)
   # ---------------------------------------------------------------------------
   test-brain-api:
     name: Test brain-api
@@ -64,10 +64,7 @@ jobs:
         run: pip install -e ".[dev]" asyncpg
 
       - name: Run tests
-        run: |
-          pytest tests/test_teams_service.py tests/test_teams_api.py \
-            -v --no-header -p no:cacheprovider \
-            --tb=short
+        run: pytest tests/ -v --no-header -p no:cacheprovider --tb=short
         env:
           ENVIRONMENT: test
           SECRET_KEY: ci-secret-key
@@ -141,39 +138,101 @@ jobs:
         run: helm lint infra/helm/keycloak
 
   # ---------------------------------------------------------------------------
-  # Job 5: Docker build — only on pushes to main (too slow for every PR)
-  # Verifies all Dockerfiles can build successfully.
+  # Job 5: Build & push to DOCR — only on pushes to main
+  #
+  # Pushes two tags per image:
+  #   :<git-sha>  — immutable, used by deploy and for rollback
+  #   :latest     — convenience alias
+  #
+  # Requires these GitHub secrets:
+  #   DO_API_TOKEN    — DigitalOcean API token (authenticates to DOCR)
+  #   DO_REGISTRY_NAME — DOCR registry slug, e.g. "bedrock"
+  #
+  # Requires these GitHub Actions variables (non-sensitive, baked into brain-web):
+  #   VITE_API_BASE_URL       — e.g. https://api.yourdomain.com
+  #   VITE_KEYCLOAK_URL       — e.g. https://auth.yourdomain.com
+  #   VITE_KEYCLOAK_REALM     — bedrock
+  #   VITE_KEYCLOAK_CLIENT_ID — brain-ui
   # ---------------------------------------------------------------------------
   docker-build:
-    name: Docker Build
+    name: Build & Push to DOCR
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [lint-python, test-brain-api, build-web]
-    strategy:
-      matrix:
-        service: [brain-api, mcp-gateway, sync-bridge]
+
     steps:
       - uses: actions/checkout@v4
+
+      - name: Login to DOCR
+        uses: docker/login-action@v3
+        with:
+          registry: registry.digitalocean.com
+          username: ${{ secrets.DO_API_TOKEN }}
+          password: ${{ secrets.DO_API_TOKEN }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build ${{ matrix.service }}
+      - name: Build & push brain-api
         uses: docker/build-push-action@v5
         with:
-          context: services/${{ matrix.service }}
-          push: false
-          cache-from: type=gha,scope=${{ matrix.service }}
-          cache-to: type=gha,scope=${{ matrix.service }},mode=max
-          tags: bedrock/${{ matrix.service }}:ci
+          context: services/brain-api
+          push: true
+          cache-from: type=gha,scope=brain-api
+          cache-to: type=gha,scope=brain-api,mode=max
+          tags: |
+            registry.digitalocean.com/${{ secrets.DO_REGISTRY_NAME }}/brain-api:${{ github.sha }}
+            registry.digitalocean.com/${{ secrets.DO_REGISTRY_NAME }}/brain-api:latest
+
+      - name: Build & push mcp-gateway
+        uses: docker/build-push-action@v5
+        with:
+          context: services/mcp-gateway
+          push: true
+          cache-from: type=gha,scope=mcp-gateway
+          cache-to: type=gha,scope=mcp-gateway,mode=max
+          tags: |
+            registry.digitalocean.com/${{ secrets.DO_REGISTRY_NAME }}/mcp-gateway:${{ github.sha }}
+            registry.digitalocean.com/${{ secrets.DO_REGISTRY_NAME }}/mcp-gateway:latest
+
+      - name: Build & push sync-bridge
+        uses: docker/build-push-action@v5
+        with:
+          context: services/sync-bridge
+          push: true
+          cache-from: type=gha,scope=sync-bridge
+          cache-to: type=gha,scope=sync-bridge,mode=max
+          tags: |
+            registry.digitalocean.com/${{ secrets.DO_REGISTRY_NAME }}/sync-bridge:${{ github.sha }}
+            registry.digitalocean.com/${{ secrets.DO_REGISTRY_NAME }}/sync-bridge:latest
+
+      - name: Build & push brain-web
+        uses: docker/build-push-action@v5
+        with:
+          context: services/brain-web
+          push: true
+          cache-from: type=gha,scope=brain-web
+          cache-to: type=gha,scope=brain-web,mode=max
+          build-args: |
+            VITE_API_BASE_URL=${{ vars.VITE_API_BASE_URL }}
+            VITE_KEYCLOAK_URL=${{ vars.VITE_KEYCLOAK_URL }}
+            VITE_KEYCLOAK_REALM=${{ vars.VITE_KEYCLOAK_REALM }}
+            VITE_KEYCLOAK_CLIENT_ID=${{ vars.VITE_KEYCLOAK_CLIENT_ID }}
+          tags: |
+            registry.digitalocean.com/${{ secrets.DO_REGISTRY_NAME }}/brain-web:${{ github.sha }}
+            registry.digitalocean.com/${{ secrets.DO_REGISTRY_NAME }}/brain-web:latest
 
   # ---------------------------------------------------------------------------
   # Job 6: Deploy to DigitalOcean Droplet
   # Only runs on push to main AFTER docker-build passes.
-  # Requires these GitHub secrets:
-  #   DO_SSH_KEY        — private key for the deploy user on the Droplet
-  #   DO_DROPLET_IP     — Droplet IP address
-  #   DO_DEPLOY_USER    — SSH user (default: deploy)
+  #
+  # Passes DEPLOY_TAG (git SHA) and DOCR credentials to the Droplet via SSH.
+  # deploy.sh uses these to pull the exact images built in Job 5.
+  #
+  # Requires these GitHub secrets (in addition to Job 5 secrets above):
+  #   DO_SSH_KEY     — private key for the deploy user on the Droplet
+  #   DO_DROPLET_IP  — Droplet IP address
+  #   DO_DEPLOY_USER — SSH user (default: deploy)
   # ---------------------------------------------------------------------------
   deploy-digitalocean:
     name: Deploy to DigitalOcean
@@ -187,10 +246,17 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DO_DROPLET_IP }}
-          username: ${{ secrets.DO_DEPLOY_USER || 'deploy' }}
+          username: ${{ secrets.DO_DEPLOY_USER }}
           key: ${{ secrets.DO_SSH_KEY }}
+          envs: DEPLOY_TAG,DO_API_TOKEN,DO_REGISTRY_NAME
           script: |
             set -e
             cd /opt/bedrock-brain
+            git fetch origin main
+            git reset --hard origin/main
             bash infra/digitalocean/deploy.sh
           script_stop: true
+        env:
+          DEPLOY_TAG: ${{ github.sha }}
+          DO_API_TOKEN: ${{ secrets.DO_API_TOKEN }}
+          DO_REGISTRY_NAME: ${{ secrets.DO_REGISTRY_NAME }}

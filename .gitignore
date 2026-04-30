@@ -8,6 +8,7 @@
 .env
 .env.*
 !.env.example
+!.env.do.example
 *.pem
 *.key
 *.crt
