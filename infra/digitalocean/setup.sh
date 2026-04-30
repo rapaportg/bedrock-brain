@@ -88,7 +88,9 @@ fi
 # 4. SSH hardening
 # ---------------------------------------------------------------------------
 echo "[4/6] Hardening SSH..."
-sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+# Allow root login via SSH key only (no passwords). Set to "no" later once
+# the deploy user is verified working with sudo.
+sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
 sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
 systemctl reload sshd
 
@@ -116,7 +118,7 @@ chown -R "${DEPLOY_USER}:${DEPLOY_USER}" "${APP_DIR}"
 
 # Scaffold .env from DO example if not present
 if [[ ! -f "${APP_DIR}/.env" ]]; then
-    cp "${APP_DIR}/infra/digitalocean/.env.do.example" "${APP_DIR}/.env"
+    cp "${APP_DIR}/.env.example" "${APP_DIR}/.env"
     echo ""
     echo "  *** ACTION REQUIRED: edit ${APP_DIR}/.env with your real values ***"
 fi
