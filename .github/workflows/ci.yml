@@ -1,0 +1,168 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-flight runs for the same branch/PR
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  # Job 1: Python lint (ruff) — brain-api, mcp-gateway, sync-bridge
+  # ---------------------------------------------------------------------------
+  lint-python:
+    name: Lint Python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Lint brain-api
+        run: ruff check services/brain-api/app
+        working-directory: ${{ github.workspace }}
+
+      - name: Lint mcp-gateway
+        run: ruff check services/mcp-gateway/app
+        working-directory: ${{ github.workspace }}
+
+      - name: Lint sync-bridge
+        run: ruff check services/sync-bridge/app
+        working-directory: ${{ github.workspace }}
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Python tests — brain-api (43 tests, no live DB required)
+  # ---------------------------------------------------------------------------
+  test-brain-api:
+    name: Test brain-api
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/brain-api
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/brain-api/pyproject.toml
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]" asyncpg
+
+      - name: Run tests
+        run: |
+          pytest tests/test_teams_service.py tests/test_teams_api.py \
+            -v --no-header -p no:cacheprovider \
+            --tb=short
+        env:
+          ENVIRONMENT: test
+          SECRET_KEY: ci-secret-key
+          POSTGRES_HOST: localhost
+          POSTGRES_PASSWORD: test
+          OIDC_ISSUER_URL: http://localhost:8080/realms/bedrock
+          OIDC_JWKS_URL: http://localhost:8080/realms/bedrock/protocol/openid-connect/certs
+          S3_ENDPOINT_URL: http://localhost:9000
+          S3_ACCESS_KEY_ID: test
+          S3_SECRET_ACCESS_KEY: test
+
+  # ---------------------------------------------------------------------------
+  # Job 3: Web build — brain-web (React + Vite)
+  # ---------------------------------------------------------------------------
+  build-web:
+    name: Build brain-web
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/brain-web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: services/brain-web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          VITE_API_URL: http://localhost:8000
+          VITE_KEYCLOAK_URL: http://localhost:8080
+          VITE_KEYCLOAK_REALM: bedrock
+          VITE_KEYCLOAK_CLIENT_ID: brain-ui
+
+  # ---------------------------------------------------------------------------
+  # Job 4: Helm lint — validate all charts
+  # ---------------------------------------------------------------------------
+  helm-lint:
+    name: Helm Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: "3.14.0"
+
+      - name: Lint brain-api chart
+        run: helm lint infra/helm/brain-api
+
+      - name: Lint mcp-gateway chart
+        run: helm lint infra/helm/mcp-gateway
+
+      - name: Lint sync-bridge chart
+        run: helm lint infra/helm/sync-bridge
+
+      - name: Lint pgbouncer chart
+        run: helm lint infra/helm/pgbouncer
+
+      - name: Lint redis chart
+        run: helm lint infra/helm/redis
+
+      - name: Lint keycloak chart
+        run: helm lint infra/helm/keycloak
+
+  # ---------------------------------------------------------------------------
+  # Job 5: Docker build — only on pushes to main (too slow for every PR)
+  # Verifies all Dockerfiles can build successfully.
+  # ---------------------------------------------------------------------------
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [lint-python, test-brain-api, build-web]
+    strategy:
+      matrix:
+        service: [brain-api, mcp-gateway, sync-bridge]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.service }}
+        uses: docker/build-push-action@v5
+        with:
+          context: services/${{ matrix.service }}
+          push: false
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,scope=${{ matrix.service }},mode=max
+          tags: bedrock/${{ matrix.service }}:ci
