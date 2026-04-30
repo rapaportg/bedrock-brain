@@ -17,6 +17,7 @@ from mcp.server import Server
 from mcp.server.sse import SseServerTransport
 from starlette.applications import Starlette
 from starlette.requests import Request
+from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
 from app.config import settings
@@ -67,18 +68,22 @@ def _extract_token(request: Request) -> str | None:
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         return auth[7:]
-    return request.query_params.get("token")
+    return None
 
 
 # ---------------------------------------------------------------------------
 # Starlette app (wraps MCP server in HTTP)
 # ---------------------------------------------------------------------------
 
+async def healthz(_: Request) -> JSONResponse:
+    return JSONResponse({"status": "ok"})
+
+
 app = Starlette(
     routes=[
         Route("/sse", endpoint=handle_sse),
         Mount("/messages/", app=sse_transport.handle_post_message),
-        Route("/healthz", endpoint=lambda r: __import__("starlette.responses", fromlist=["JSONResponse"]).JSONResponse({"status": "ok"})),
+        Route("/healthz", endpoint=healthz),
     ]
 )
 

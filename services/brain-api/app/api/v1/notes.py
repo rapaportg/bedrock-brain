@@ -13,6 +13,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CallerIdentity, CurrentCaller
@@ -87,7 +88,7 @@ async def create_note(
         owner_id=caller.user_id,
         team_id=body.team_id,
     )
-    content_hash = put_note(s3_key, body.content)
+    content_hash = await put_note(s3_key, body.content)
 
     note = Note(
         id=note_id,
@@ -134,7 +135,7 @@ async def get_note_detail(
 ):
     note = await _get_or_404(note_id, db)
     await _require_read(caller, note, db)
-    content = get_note(note.s3_key)
+    content = await get_note(note.s3_key)
     return NoteDetailResponse(**NoteResponse.model_validate(note).model_dump(), content=content)
 
 
@@ -153,7 +154,7 @@ async def update_note(
     if body.tags is not None:
         note.tags = body.tags
 
-    visibility_changed = body.visibility and body.visibility != note.visibility
+    visibility_changed = body.visibility is not None and body.visibility != note.visibility
     new_visibility = body.visibility or note.visibility
     new_team_id = body.team_id if body.team_id is not None else note.team_id
 
@@ -164,17 +165,19 @@ async def update_note(
             owner_id=note.owner_id,
             team_id=new_team_id,
         )
-        current_content = get_note(note.s3_key) if body.content is None else body.content
-        content_hash = put_note(new_s3_key, current_content)
+        current_content = await get_note(note.s3_key) if body.content is None else body.content
+        content_hash = await put_note(new_s3_key, current_content)
 
         if visibility_changed and new_s3_key != note.s3_key:
-            move_note(note.s3_key, new_s3_key)
+            # Content is already at new_s3_key (written by put_note above).
+            # Just clean up the old key; move_note would overwrite the new content.
+            await delete_note(note.s3_key)
 
         note.s3_key = new_s3_key
         note.content_hash = content_hash
         note.byte_size = len(current_content.encode())
 
-    if body.visibility:
+    if body.visibility is not None:
         note.visibility = body.visibility
         note.team_id = new_team_id
         note.org_id = caller.org_id if body.visibility in ("org", "team") else None
@@ -192,7 +195,7 @@ async def delete_note_endpoint(
 ):
     note = await _get_or_404(note_id, db)
     await _require_write(caller, note, db)
-    delete_note(note.s3_key)
+    await delete_note(note.s3_key)
     await db.delete(note)
     await db.commit()
 
@@ -215,7 +218,11 @@ async def grant_access(
         granted_by=caller.user_id,
     )
     db.add(acl)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="ACL entry already exists")
     return {"status": "granted"}
 
 

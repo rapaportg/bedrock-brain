@@ -27,7 +27,6 @@ def _parse_frontmatter(content: str) -> tuple[dict, str]:
     match = FRONTMATTER_RE.match(content)
     if not match:
         return {}, content
-    import re as _re
     fm_text = match.group(1)
     body = content[match.end():]
     meta: dict = {}

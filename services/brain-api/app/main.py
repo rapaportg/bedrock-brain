@@ -14,7 +14,7 @@ log = structlog.get_logger()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("brain-api starting", environment=settings.environment)
-    ensure_bucket_exists()
+    await ensure_bucket_exists()
     log.info("S3 bucket ready", bucket=settings.s3_bucket_name)
     yield
     log.info("brain-api shutting down")
