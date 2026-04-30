@@ -51,7 +51,7 @@ echo "[2/6] Installing Docker..."
 if ! command -v docker &>/dev/null; then
     install -m 0755 -d /etc/apt/keyrings
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-        | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        | gpg --batch --yes --no-tty --dearmor -o /etc/apt/keyrings/docker.gpg
     chmod a+r /etc/apt/keyrings/docker.gpg
 
     echo \
