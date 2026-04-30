@@ -205,6 +205,28 @@ services:
       - "8001:8001"
 
   # ---------------------------------------------------------------------------
+  # Brain Web — React + Vite front-end client (served by nginx on port 3000)
+  # ---------------------------------------------------------------------------
+  brain-web:
+    build:
+      context: ./services/brain-web
+      dockerfile: Dockerfile
+      args:
+        VITE_KEYCLOAK_URL: http://localhost:8080
+        VITE_KEYCLOAK_REALM: bedrock
+        VITE_KEYCLOAK_CLIENT_ID: brain-ui
+        VITE_API_BASE_URL: http://localhost:8000
+    restart: unless-stopped
+    networks: [bedrock]
+    depends_on:
+      brain-api:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+
+  # ---------------------------------------------------------------------------
   # Sync Bridge — Obsidian vault → brain-api sync daemon
   # Mount your local Obsidian vault to /vault
   # ---------------------------------------------------------------------------

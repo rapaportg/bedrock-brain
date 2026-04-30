@@ -166,3 +166,31 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,scope=${{ matrix.service }},mode=max
           tags: bedrock/${{ matrix.service }}:ci
+
+  # ---------------------------------------------------------------------------
+  # Job 6: Deploy to DigitalOcean Droplet
+  # Only runs on push to main AFTER docker-build passes.
+  # Requires these GitHub secrets:
+  #   DO_SSH_KEY        — private key for the deploy user on the Droplet
+  #   DO_DROPLET_IP     — Droplet IP address
+  #   DO_DEPLOY_USER    — SSH user (default: deploy)
+  # ---------------------------------------------------------------------------
+  deploy-digitalocean:
+    name: Deploy to DigitalOcean
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [docker-build, helm-lint]
+    environment: production
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DO_DROPLET_IP }}
+          username: ${{ secrets.DO_DEPLOY_USER || 'deploy' }}
+          key: ${{ secrets.DO_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/bedrock-brain
+            bash infra/digitalocean/deploy.sh
+          script_stop: true

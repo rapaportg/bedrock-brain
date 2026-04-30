@@ -1,0 +1,134 @@
+version: "3.9"
+
+# =============================================================================
+# bedrock-brain — DigitalOcean production stack
+#
+# Differences from docker-compose.yml (local dev):
+#   - MinIO and minio-init removed  → use DigitalOcean Spaces (S3-compatible)
+#   - nginx added                   → SSL termination + reverse proxy
+#   - Hot-reload volume mounts removed
+#   - All images built from source (no :latest tags for app services)
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f infra/digitalocean/docker-compose.prod.yml up -d
+# =============================================================================
+
+networks:
+  bedrock:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  keycloak_data:
+  certbot_www:
+  certbot_conf:
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Postgres — same as dev; in future migrate to DO Managed Postgres
+  # ---------------------------------------------------------------------------
+  postgres:
+    restart: always
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+
+  # ---------------------------------------------------------------------------
+  # PgBouncer — unchanged
+  # ---------------------------------------------------------------------------
+  pgbouncer:
+    restart: always
+
+  # ---------------------------------------------------------------------------
+  # Redis — unchanged
+  # ---------------------------------------------------------------------------
+  redis:
+    restart: always
+    volumes:
+      - redis_data:/data
+
+  # ---------------------------------------------------------------------------
+  # Keycloak — must know its public hostname for OIDC redirect URIs
+  # ---------------------------------------------------------------------------
+  keycloak:
+    restart: always
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    environment:
+      KC_HOSTNAME: ${KEYCLOAK_PUBLIC_HOST}           # e.g. auth.yourdomain.com
+      KC_PROXY: edge                                  # nginx terminates TLS
+      KC_HOSTNAME_STRICT: "true"
+      KC_HOSTNAME_STRICT_HTTPS: "true"
+      KC_HTTP_ENABLED: "true"
+
+  # ---------------------------------------------------------------------------
+  # Brain API — production image, no hot-reload mount
+  # ---------------------------------------------------------------------------
+  brain-api:
+    restart: always
+    volumes: []                                       # override dev bind mount
+    environment:
+      ENVIRONMENT: production
+
+  # ---------------------------------------------------------------------------
+  # MCP Gateway — production image, no hot-reload mount
+  # ---------------------------------------------------------------------------
+  mcp-gateway:
+    restart: always
+    volumes: []
+
+  # ---------------------------------------------------------------------------
+  # Brain Web — production image, no hot-reload mount
+  # ---------------------------------------------------------------------------
+  brain-web:
+    restart: always
+
+  # ---------------------------------------------------------------------------
+  # Sync Bridge — production image, no hot-reload mount
+  # ---------------------------------------------------------------------------
+  sync-bridge:
+    restart: always
+    volumes: []
+
+  # ---------------------------------------------------------------------------
+  # Nginx — SSL termination + reverse proxy
+  # Certbot manages certs in /etc/letsencrypt (mounted via certbot_conf volume)
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:1.25-alpine
+    restart: always
+    networks: [bedrock]
+    depends_on:
+      - brain-web
+      - brain-api
+      - keycloak
+      - mcp-gateway
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/digitalocean/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - certbot_www:/var/www/certbot:ro
+      - certbot_conf:/etc/letsencrypt:ro
+
+  # ---------------------------------------------------------------------------
+  # Certbot — renews certs on a timer; run manually for first-time issuance
+  # First-time: docker compose run --rm certbot certonly ...
+  # ---------------------------------------------------------------------------
+  certbot:
+    image: certbot/certbot:latest
+    networks: [bedrock]
+    volumes:
+      - certbot_www:/var/www/certbot
+      - certbot_conf:/etc/letsencrypt
+    entrypoint: >
+      /bin/sh -c "
+        trap exit TERM;
+        while :; do
+          certbot renew --webroot -w /var/www/certbot --quiet;
+          sleep 12h & wait $${!};
+        done
+      "

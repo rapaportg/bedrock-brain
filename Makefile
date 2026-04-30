@@ -3,7 +3,7 @@
 # =============================================================================
 
 .PHONY: help up down restart logs build ps shell-api shell-gateway \
-        migrate lint test clean keycloak-url minio-url
+        migrate lint test clean keycloak-url minio-url web-dev
 
 help:
 	@echo ""
@@ -26,6 +26,7 @@ help:
 	@echo ""
 	@echo "  make keycloak-url  Print Keycloak admin URL"
 	@echo "  make minio-url     Print MinIO console URL"
+	@echo "  make web-dev       Run UI in Vite hot-reload dev mode"
 	@echo ""
 
 # ---------------------------------------------------------------------------
@@ -37,11 +38,17 @@ up:
 	docker compose up -d
 	@echo ""
 	@echo "  Stack is up."
+	@echo "  Brain UI:       http://localhost:3000"
 	@echo "  Brain API:      http://localhost:8000/docs"
 	@echo "  MCP Gateway:    http://localhost:8001"
 	@echo "  Keycloak admin: http://localhost:8080  (admin / admin)"
 	@echo "  MinIO console:  http://localhost:9001  (minioadmin / minioadmin)"
 	@echo ""
+
+# Run the web client in Vite dev mode (hot reload) without Docker
+web-dev:
+	@cp -n services/brain-web/.env.example services/brain-web/.env 2>/dev/null || true
+	cd services/brain-web && npm install && npm run dev
 
 down:
 	docker compose down

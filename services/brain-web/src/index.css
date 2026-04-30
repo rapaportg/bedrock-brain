@@ -1,0 +1,93 @@
+/* ── Reset & tokens ────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:           #0f1117;
+  --surface:      #1a1d27;
+  --surface-2:    #222636;
+  --border:       #2e3347;
+  --accent:       #6c8fff;
+  --accent-dim:   #3d5299;
+  --text:         #e2e6f0;
+  --text-muted:   #7b82a0;
+  --danger:       #e05c6a;
+  --success:      #4caf82;
+  --tag-bg:       #1e2540;
+  --tag-text:     #8fa4f7;
+  --private-c:    #7b82a0;
+  --team-c:       #5bbcf7;
+  --org-c:        #a97cf7;
+  --public-c:     #4caf82;
+
+  --radius:       8px;
+  --radius-sm:    4px;
+  --sidebar-w:    280px;
+  --header-h:     52px;
+  font-size: 14px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+html, body, #root {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+}
+
+/* ── Scrollbar ─────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* ── Utility ───────────────────────────────────────────────────────────────── */
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+}
+
+input, textarea, select {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  outline: none;
+  width: 100%;
+}
+input:focus, textarea:focus, select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+/* ── Visibility badge ──────────────────────────────────────────────────────── */
+.vis-badge {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .4px;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 20px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.vis-badge.private  { background: color-mix(in srgb, var(--private-c) 15%, transparent); color: var(--private-c); }
+.vis-badge.team     { background: color-mix(in srgb, var(--team-c)    15%, transparent); color: var(--team-c); }
+.vis-badge.org      { background: color-mix(in srgb, var(--org-c)     15%, transparent); color: var(--org-c); }
+.vis-badge.public   { background: color-mix(in srgb, var(--public-c)  15%, transparent); color: var(--public-c); }
+
+/* ── Tag pill ──────────────────────────────────────────────────────────────── */
+.tag {
+  background: var(--tag-bg);
+  color: var(--tag-text);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
