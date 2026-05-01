@@ -98,9 +98,9 @@ systemctl reload sshd
 echo "[5/6] Configuring UFW firewall..."
 ufw default deny incoming
 ufw default allow outgoing
-ufw allow 22/tcp   comment "SSH"
-ufw allow 80/tcp   comment "HTTP (Let's Encrypt + redirect)"
-ufw allow 443/tcp  comment "HTTPS"
+ufw allow 22/tcp
+ufw allow 80/tcp
+ufw allow 443/tcp
 ufw --force enable
 echo "  UFW status:"
 ufw status numbered
