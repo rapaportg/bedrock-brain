@@ -87,8 +87,8 @@ fi
 # ---------------------------------------------------------------------------
 # 4. SSH hardening
 # ---------------------------------------------------------------------------
-echo "[4/6] Hardening SSH..."
-sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+echo "[4/6] Hardening SSH (keeping root login enabled)..."
+sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
 sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
 systemctl reload sshd
 
