@@ -8,6 +8,7 @@
 .env
 .env.*
 !.env.example
+!infra/digitalocean/.env.do.example
 *.pem
 *.key
 *.crt
