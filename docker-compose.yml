@@ -50,7 +50,7 @@ services:
   # PgBouncer — connection pooler (critical at scale: 15k agents → postgres)
   # ---------------------------------------------------------------------------
   pgbouncer:
-    image: bitnami/pgbouncer:latest
+    image: bitnamilegacy/pgbouncer:1.23.1
     restart: unless-stopped
     networks: [bedrock]
     depends_on:
