@@ -146,7 +146,7 @@ services:
       KC_HTTP_ENABLED: "true"
     command: start-dev --import-realm
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/health/ready || exit 1"]
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && printf 'GET /health/ready HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && grep -q 'UP' <&3"]
       interval: 15s
       timeout: 10s
       retries: 20
